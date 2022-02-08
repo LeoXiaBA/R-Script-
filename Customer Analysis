@@ -1,0 +1,515 @@
+
+library("dplyr")
+library("car")
+library("forcats")
+library("rpart")
+library("rpart.plot")
+library("nnet")
+library("foreign")
+library("corrplot")
+library("randomForest")
+library("pdp")
+library("ggplot2")
+library("Hmisc")
+setwd("/Users/xialeo/Downloads/R data/BADM")
+source("BCA_functions_source_file.R")
+
+
+setwd("/Users/xialeo/Desktop/2021 FALL/bus445/assignment3")
+
+van <- read.csv("vcRSP2017.csv", stringsAsFactors = TRUE)
+# Create estimation and validation samples
+van$Sample <- create.samples(van, est = 0.7, val = 0.3, rand.seed = 1)
+variable.summary(van) # Note %.NA and Min.Level.Size
+
+
+# Not useful statistically since they are arbitrary numbers
+row.names(van) <- van$unique # Set "ID" as record name
+van$unique <- NULL
+#remove post code
+van$pcode <- NULL
+#combine gender and remove orginal
+View(van)
+van$gend <- if_else(van$gendf == 1, 0, if_else(van$gendm == 1, 1, 2))
+
+van$gendf <- NULL
+van$gendm <- NULL
+#remove N_IND_INC_1
+van$N_IND_INC_ <- NULL
+#impute numrr_1 and numcon_1
+van$numrr_1 <- if_else(condition = is.na(van$numrr_1),
+true = 0,
+false = as.double(van$numrr_1))
+
+van$numcon_1 <- if_else(condition = is.na(van$numcon_1),
+true = 0,
+false = as.double(van$numcon_1))
+#remove CH-NM-SERV
+#van$CH_NM_SERV <- NULL
+
+#dummy variable for Loan and MRGG
+van$noLoan <- if_else(is.na(van$BALLOAN), 1, 0)
+van$noMrgg <- if_else(is.na(van$BALMRGG), 1, 0)
+
+#impute 0 for LOAN and MRGG
+van$BALLOAN <- if_else(condition = is.na(van$BALLOAN),
+true = 0,
+false = van$BALLOAN)
+
+van$BALMRGG <- if_else(condition = is.na(van$BALMRGG),
+true = 0,
+false = van$BALMRGG)
+
+#bin CHE and SAV
+van$BALCHQ <- if_else(condition = is.na(van$BALCHQ),
+true = 0,
+false = van$BALCHQ)
+
+van$BALSAV <- if_else(condition = is.na(van$BALSAV),
+true = 0,
+false = van$BALSAV)
+
+van$BALACC <- van$BALCHQ + van$BALSAV
+
+van$BALCHQ <- NULL
+van$BALSAV <- NULL
+
+#remove BALLOC
+van$BALLOC <- NULL
+
+variable.summary(van)
+
+
+van2 <- na.omit(van)
+variable.summary(van2)
+glimpse(van2)
+van2$valsegm = droplevels(van2$valsegm)
+levels(van2$valsegm)
+
+variable.summary(van2)
+i
+#Random forest
+
+# Copy & paste given variable names into the predictor list
+paste(names(van2), collapse = " + ")
+
+# all variables in random forest
+vanForestAllv <- randomForest(formula = APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+  CH_NM_SERV+CH_NM_PRD + valsegm  + numcon_1 +
+  avginc_1 + avginv_1 + gend + noLoan + noMrgg + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  importance = TRUE,
+  ntree = 500, mtry = 4)
+View(van2)
+#
+# Contingency Table
+vanForestAllv[["confusion"]]
+
+# Variable importance
+varImpPlot(vanForestAllv,type = 2,
+main="vanForestAllv", # title
+cex =0.7) # font size
+
+levels(van2$APURCH)[2]
+
+
+# TOTDEP
+partial(vanForestAllv, pred.var = "TOTDEP",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# BALACC
+partial(vanForestAllv, pred.var = "BALACC",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+
+#Logistic Regression
+
+# Correlation Matrix
+# Select numeric columns only, then calculate and print correlation coefficients
+corrMatrix <- cor(select_if(van2, is.numeric)) # see ?dplyr::select_if
+# temporarily reduce the number of output digits for easier inspection
+options(digits = 2)
+corrMatrix
+options(digits = 7) # then reset output digits
+
+# Visualize correlation
+corrplot(corrMatrix,method="number",type="lower",
+diag = FALSE,number.cex = 0.7)
+
+# Create a logistic regression model
+vanLogis <- glm(formula = APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+  CH_NM_SERV+CH_NM_PRD + valsegm + numrr_1 + numcon_1 +
+  avginc_1 + avginv_1 + gend + noLoan + noMrgg + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  family = binomial(logit))
+# Print
+summary(vanLogis)
+
+# Calculate and print McFadden R square (See Logistic Regression Chapter)
+MR2 <- 1 - (vanLogis$deviance / vanLogis$null.deviance)
+MR2.3 <- round(MR2,digits = 3)
+print(paste("McFadden Rsquared: ",MR2.3))
+
+#combine factors
+#van2$New.valsegm <- fct_collapse(van2$valsegm,
+#AB = c("A", "B"),
+#CDE = c("C", "D", "E"))
+
+#combine and remove correlated variable:
+van2$numrr_1 <- NULL
+
+van2$avginc_1_all <- van2$avginc_1 + van2$avginv_1
+van2$avginc_1 <- NULL
+van2$avginv_1 <- NULL
+
+van2$CH_NM_all <-van2$CH_NM_SERV+van2$CH_NM_PRD
+#van2$CH_NM_SERV <-NULL
+#van2$CH_NM_PRD <- NULL
+
+APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+  CH_NM_all + valsegm  + numcon_1 +
+  avginc_1_all + gend + noLoan + noMrgg + BALACC
+
+# Create a logistic regression model
+vanLogis <- glm(formula = APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+    CH_NM_all + valsegm + numcon_1 +
+  avginc_1_all + gend + noLoan + noMrgg + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  family = binomial(logit))
+MR2 <- 1 - (vanLogis$deviance / vanLogis$null.deviance)
+MR2.3 <- round(MR2,digits = 3)
+print(paste("McFadden Rsquared: ",MR2.3))
+# Print
+summary(vanLogis)
+
+
+#Run a stepwise regression using the "Weslogis" model
+vanStep <- step(vanLogis, direction = "both")
+#
+summary(vanStep)
+
+
+
+#
+# McFadden R2
+MR2.step <- 1 - (vanStep$deviance / vanStep$null.deviance)
+MR2.step.3 <- round(MR2.step,digits = 3)
+print(paste("McFadden Rsquared: ",MR2.step.3))
+
+# Compare both models using cumulative Lift Chart
+lift.chart(modelList = c("vanLogis","vanStep"),
+data = filter(van2, Sample == "Validation"),
+targLevel = "Y", trueResp = 0.022, type = "cumulative",
+sub = "Validation")
+
+
+APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+  CH_NM_all + valsegm + numcon_1 +
+  avginc_1_all + gend + noLoan + noMrgg + BALACC
+
+vanForestAllv <- randomForest(formula = APURCH ~ age + atmcrd +
+                              paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+                              NEWMRGG + TXBRAN + TXATM + TXPOS +
+                              TXCHQ + TXWEB + TXTEL + TOTSERV +
+                              CH_NM_all + valsegm + numcon_1 +
+                              avginc_1_all + gend + noLoan + noMrgg + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  importance = TRUE,
+  ntree = 500, mtry = 4)
+
+vanForestat2 <- randomForest(formula = APURCH ~ age + atmcrd +
+                                paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+                                NEWMRGG + TXBRAN + TXATM + TXPOS +
+                                TXCHQ + TXWEB + TXTEL + TOTSERV +
+                                CH_NM_all+ valsegm + numcon_1 +
+                                avginc_1_all + gend + noLoan + noMrgg + BALACC,
+                              data = filter(van2, Sample =="Estimation"),
+                              importance = TRUE,
+                              ntree = 500, mtry = 4)
+
+
+# Compare forests and regression models
+lift.chart(modelList = c("vanLogis","vanForestAllv"),
+data = filter(van2, Sample == "Validation"),
+targLevel = "Y", trueResp = 0.022, type = "cumulative",
+sub = "Validation")
+
+
+#
+# Variable importance
+varImpPlot(vanForestAllv,type = 2,
+main="vanForestAllvat", # title
+cex =0.7) # font size
+
+
+
+levels(van2$APURCH)[2]
+
+#wealth variable partial dependence plot
+
+# TOTDEP
+partial(vanForestAllv, pred.var = "TOTDEP",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# BALACC
+partial(vanForestAllv, pred.var = "BALACC",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# TXBRAN
+partial(vanForestAllv, pred.var = "TXBRAN",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# TXCHQ
+partial(vanForestAllv, pred.var = "TXCHQ",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# TXATM
+partial(vanForestAllv, pred.var = "TXATM",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# TOTSERV
+partial(vanForestAllv, pred.var = "TOTSERV",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# TXPOS
+partial(vanForestAllv, pred.var = "TXPOS",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+
+# age
+partial(vanForestAllv, pred.var = "age",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+#environment variable partial denpendence plot
+
+# avginc_1_all
+partial(vanForestAllv, pred.var = "avginc_1_all",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+# numcon_1
+partial(vanForestAllv, pred.var = "numcon_1",
+prob = TRUE, # probabilities on yaxis
+which.class = 2, # predict level 2, "Y"
+plot = TRUE, # generate plot
+rug = TRUE, # plot decile hashmarks
+plot.engine = "ggplot2")
+
+#ignore top 10%
+
+# Trim the top 10%
+# TOTDEP
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TOTDEP",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# BALACC
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "BALACC",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# TXBRAN
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TXBRAN",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# TXCHQ
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TXCHQ",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# TXATM
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TXATM",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# TOTSERV
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TOTSERV",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# TXPOS
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "TXPOS",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# avginc_1_all
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "avginc_1_all",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# numcon_1
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "numcon_1",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "nummrr_1",
+                              prob = TRUE,
+                              which.class = 2,
+                              quantiles = TRUE, # prepare data trimming
+                              probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+                              plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+            rug = TRUE,
+            train = filter(van2, Sample == "Estimation"))
+
+# age
+vanForestAllv.trim <- partial(vanForestAllv, pred.var = "age",
+prob = TRUE,
+which.class = 2,
+quantiles = TRUE, # prepare data trimming
+probs = seq(from = 0.0, to = 0.9, by = 0.02), # of bottom 90%
+plot= FALSE) # generate data, no plot
+plotPartial(vanForestAllv.trim, # and pass data to plotting function
+rug = TRUE,
+train = filter(van2, Sample == "Estimation"))
+
+# 4 node nnet
+vanNnet4 <- Nnet(formula = APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN +
+  TXTEL + TOTSERV +
+  valsegm + noLoan + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  decay = 0.15, size = 4)
+
+vanNnet4.1 <- Nnet(formula = APURCH ~ age + atmcrd +
+                   paydep + TOTDEP + BALMRGG + NEWLOC +
+                   TXBRAN + TXTEL + TOTSERV +
+                   CH_NM_all + valsegm + noLoan + BALACC,
+                 data = filter(van2, Sample =="Estimation"),
+                 decay = 0.15, size = 4)
+
+# Compare stepwise, tree, and neural network model
+lift.chart(modelList = c("vanStep", "vanNnet4.1","vanForestAllv"),
+data = filter(van2, Sample == "Validation"),
+targLevel = "Y", trueResp = 0.022,
+type = "cumulative", sub = "Validation")
+
+vanNetAllv <- Nnet(formula = APURCH ~ age + atmcrd +
+  paydep + TOTDEP + BALLOAN + BALMRGG + NEWLOC +
+  NEWMRGG + TXBRAN + TXATM + TXPOS +
+  TXCHQ + TXWEB + TXTEL + TOTSERV +
+  CH_NM_SERV +CH_NM_PRD+ valsegm + numcon_1 +
+  avginc_1_all + gend + noLoan + noMrgg + BALACC,
+  data = filter(van2, Sample =="Estimation"),
+  decay = 0.15, size = 4)
+
+# Compare on Validation Sample
+lift.chart(modelList = c("vanStep", "vanNnet4",
+"vanNetAllv", "vanForestAllv", "vanLogis"),
+data = filter(van2, Sample == "Validation"),
+targLevel = "Y", trueResp = 0.022,
+type = "cumulative", sub = "Validation")
